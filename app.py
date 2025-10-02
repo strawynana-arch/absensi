@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import os
 import cv2
 import numpy as np
@@ -7,21 +8,21 @@ import pandas as pd
 from datetime import datetime
 import pytz
 from sklearn.neighbors import KNeighborsClassifier
-import time
+import base64
 
 # Pengaturan
-st.set_page_config(page_title="Absensi Face ID", layout="wide")
+st.set_page_config(
+    page_title="Absensi Face ID", 
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
 WIB = pytz.timezone('Asia/Jakarta')
 ENCODINGS_PATH = 'face_encodings.pkl'
 ATTENDANCE_PATH = 'attendance.csv'
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-# Session state untuk auto-capture
-if 'capture_mode' not in st.session_state:
-    st.session_state.capture_mode = False
-if 'last_capture_time' not in st.session_state:
-    st.session_state.last_capture_time = 0
-
+# Fungsi helper
 def load_known_faces():
     try:
         with open(ENCODINGS_PATH, 'rb') as f:
@@ -71,82 +72,99 @@ def log_attendance(name):
     df.to_csv(ATTENDANCE_PATH, index=False)
     return True
 
-def detect_face_ultra_fast(img):
-    """Ultra optimized untuk HP"""
-    # Resize super kecil
+def detect_face_optimized(img):
     h, w = img.shape[:2]
-    scale = 0.3  # 30% dari ukuran asli
+    scale = 0.4
     small = cv2.resize(img, (int(w*scale), int(h*scale)))
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    
-    # Deteksi dengan parameter sangat agresif
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=3, minSize=(15, 15))
+    faces = face_cascade.detectMultiScale(gray, 1.2, 3, minSize=(20, 20))
     
     if len(faces) > 0:
         (x, y, w, h) = faces[0]
-        # Scale kembali ke ukuran asli
         x, y, w, h = int(x/scale), int(y/scale), int(w/scale), int(h/scale)
-        
-        # Extract face untuk embedding
         face_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         face_roi = face_gray[y:y+h, x:x+w]
-        face_roi = cv2.resize(face_roi, (40, 40))  # Super kecil untuk speed
-        
-        # Embedding simpel: histogram 32 bins + posisi
-        hist = cv2.calcHist([face_roi], [0], None, [32], [0, 256])
+        face_roi = cv2.resize(face_roi, (48, 48))
+        hist = cv2.calcHist([face_roi], [0], None, [48], [0, 256])
         hist = cv2.normalize(hist, hist).flatten()
-        
         img_h, img_w = img.shape[:2]
         features = np.concatenate([hist, [x/img_w, y/img_h, w/img_w, h/img_h]])
-        
         return features.astype(np.float32), (x, y, w, h)
-    
     return None, None
+
+def decode_base64_image(base64_str):
+    img_data = base64.b64decode(base64_str.split(',')[1])
+    nparr = np.frombuffer(img_data, np.uint8)
+    return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+# Custom component untuk kamera lightweight
+def camera_component(key="camera", width=640, height=480, fps=15):
+    html_code = f"""
+    <div style="text-align: center;">
+        <video id="video-{key}" width="{width}" height="{height}" autoplay playsinline style="max-width: 100%; border: 2px solid #4CAF50; border-radius: 8px;"></video>
+        <canvas id="canvas-{key}" width="{width}" height="{height}" style="display:none;"></canvas>
+        <br><br>
+        <button onclick="captureFrame()" style="padding: 12px 24px; font-size: 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">
+            Capture Foto
+        </button>
+        <div id="status-{key}" style="margin-top: 10px; font-weight: bold;"></div>
+    </div>
+    
+    <script>
+    const video = document.getElementById('video-{key}');
+    const canvas = document.getElementById('canvas-{key}');
+    const status = document.getElementById('status-{key}');
+    const ctx = canvas.getContext('2d');
+    
+    // Request camera dengan constraint ringan
+    navigator.mediaDevices.getUserMedia({{
+        video: {{
+            width: {{ ideal: {width} }},
+            height: {{ ideal: {height} }},
+            frameRate: {{ ideal: {fps}, max: {fps} }},
+            facingMode: "user"
+        }}
+    }})
+    .then(stream => {{
+        video.srcObject = stream;
+        status.textContent = "Kamera siap";
+        status.style.color = "green";
+    }})
+    .catch(err => {{
+        status.textContent = "Error: " + err.message;
+        status.style.color = "red";
+    }});
+    
+    function captureFrame() {{
+        ctx.drawImage(video, 0, 0, {width}, {height});
+        const imageData = canvas.toDataURL('image/jpeg', 0.8);
+        
+        // Send ke Streamlit
+        window.parent.postMessage({{
+            type: 'streamlit:setComponentValue',
+            value: imageData
+        }}, '*');
+        
+        status.textContent = "Foto diambil, memproses...";
+        status.style.color = "blue";
+    }}
+    </script>
+    """
+    
+    return components.html(html_code, height=height + 100)
 
 # Load data
 faces_data = load_known_faces()
 
-# Sidebar
-st.sidebar.header("Mode Aplikasi")
-app_mode = st.sidebar.selectbox("Pilih Mode", ["Pendaftaran Wajah", "Absensi Real-time"])
+# Header
+st.title("Sistem Absensi Face ID - Mobile Optimized")
 
-if st.sidebar.button("Reset Data"):
-    if os.path.exists(ENCODINGS_PATH):
-        os.remove(ENCODINGS_PATH)
-    if os.path.exists(ATTENDANCE_PATH):
-        os.remove(ATTENDANCE_PATH)
-    st.sidebar.success("Data berhasil dihapus!")
-    st.rerun()
+# Tabs
+tab1, tab2, tab3 = st.tabs(["Absensi", "Pendaftaran", "Laporan"])
 
-# PENDAFTARAN
-if app_mode == "Pendaftaran Wajah":
-    st.header("Pendaftaran Wajah Baru")
-    
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        new_name = st.text_input("Nama Lengkap:")
-        img_file = st.camera_input("Ambil Foto Wajah")
-    with col2:
-        st.info(f"Terdaftar: {len(faces_data['names'])} orang")
-
-    if img_file and new_name:
-        bytes_data = img_file.getvalue()
-        cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-        emb, bbox = detect_face_ultra_fast(cv2_img)
-        
-        if emb is not None:
-            faces_data["names"].append(new_name)
-            faces_data["embeddings"].append(emb.tolist())
-            save_known_faces(faces_data)
-            st.success(f"Wajah '{new_name}' berhasil disimpan!")
-            time.sleep(1)
-            st.rerun()
-        else:
-            st.error("Wajah tidak terdeteksi")
-
-# ABSENSI REAL-TIME
-elif app_mode == "Absensi Real-time":
-    st.header("Absensi Real-time (Mode Interval)")
+# TAB ABSENSI
+with tab1:
+    st.header("Absensi Real-time")
     
     # Load model
     clf = None
@@ -156,90 +174,106 @@ elif app_mode == "Absensi Real-time":
             y = np.array(faces_data["names"])
             clf = KNeighborsClassifier(n_neighbors=1, algorithm='ball_tree')
             clf.fit(X, y)
+            st.success(f"Siap - {len(faces_data['names'])} wajah terdaftar")
         except Exception as e:
             st.error(f"Error: {e}")
-            st.stop()
     else:
         st.warning("Belum ada wajah terdaftar")
-        st.stop()
     
-    st.info("Mode ini akan mengambil foto otomatis setiap 3 detik untuk mengenali wajah")
+    st.write(f"Waktu: **{datetime.now(WIB).strftime('%H:%M:%S WIB')}**")
     
-    # Interval setting
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        interval = st.slider("Interval capture (detik)", 2, 10, 3)
-    with col2:
-        if st.button("Stop" if st.session_state.capture_mode else "Start"):
-            st.session_state.capture_mode = not st.session_state.capture_mode
-            st.rerun()
+    # Camera component dengan resolusi rendah untuk mobile
+    captured_image = camera_component(key="absensi", width=480, height=360, fps=15)
     
-    st.write(f"Waktu: {datetime.now(WIB).strftime('%H:%M:%S WIB')}")
-    
-    # Placeholder untuk notifikasi dan gambar
-    status_placeholder = st.empty()
-    image_placeholder = st.empty()
-    
-    # Mode capture aktif
-    if st.session_state.capture_mode:
-        status_placeholder.success("Mode deteksi aktif - Posisikan wajah Anda")
-        
-        # Auto-capture dengan interval
-        current_time = time.time()
-        if current_time - st.session_state.last_capture_time >= interval:
-            st.session_state.last_capture_time = current_time
+    if captured_image:
+        try:
+            img = decode_base64_image(captured_image)
+            emb, bbox = detect_face_optimized(img)
             
-            # Ambil foto
-            camera_photo = st.camera_input("Capture", label_visibility="hidden", key=f"cam_{current_time}")
-            
-            if camera_photo:
-                bytes_data = camera_photo.getvalue()
-                cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+            if emb is not None and clf:
+                name = clf.predict(emb.reshape(1, -1))[0]
+                x, y, w, h = bbox
                 
-                emb, bbox = detect_face_ultra_fast(cv2_img)
+                color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+                cv2.rectangle(img, (x, y), (x+w, y+h), color, 3)
+                cv2.putText(img, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
                 
-                if emb is not None and bbox is not None:
-                    emb_reshaped = emb.reshape(1, -1)
-                    name = clf.predict(emb_reshaped)[0]
-                    
-                    # Gambar kotak
-                    x, y, w, h = bbox
-                    color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
-                    cv2.rectangle(cv2_img, (x, y), (x+w, y+h), color, 3)
-                    cv2.putText(cv2_img, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-                    
-                    # Tampilkan
-                    image_placeholder.image(cv2_img, channels="BGR", use_column_width=True)
-                    
-                    if name != "Unknown":
-                        if log_attendance(name):
-                            status_placeholder.success(f"Absensi berhasil: {name}")
-                            time.sleep(2)
-                        else:
-                            status_placeholder.info(f"{name} sudah absen")
+                st.image(img, channels="BGR", use_column_width=True)
+                
+                if name != "Unknown":
+                    if log_attendance(name):
+                        st.success(f"Absensi berhasil: {name}")
+                        st.balloons()
                     else:
-                        status_placeholder.warning("Wajah tidak dikenali")
+                        st.info(f"{name} sudah absen dalam 1 menit terakhir")
                 else:
-                    status_placeholder.warning("Tidak ada wajah terdeteksi")
-            
-            time.sleep(0.5)
-            st.rerun()
-    else:
-        status_placeholder.info("Klik 'Start' untuk memulai deteksi")
+                    st.error("Wajah tidak dikenali")
+            else:
+                st.warning("Tidak ada wajah terdeteksi")
+        except Exception as e:
+            st.error(f"Error processing: {e}")
+
+# TAB PENDAFTARAN
+with tab2:
+    st.header("Pendaftaran Wajah Baru")
     
-    st.divider()
+    new_name = st.text_input("Nama Lengkap:")
     
-    # Laporan
-    st.subheader("Laporan Hari Ini")
+    if new_name:
+        captured_reg = camera_component(key="register", width=480, height=360, fps=15)
+        
+        if captured_reg:
+            try:
+                img = decode_base64_image(captured_reg)
+                emb, bbox = detect_face_optimized(img)
+                
+                if emb is not None:
+                    x, y, w, h = bbox
+                    cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 3)
+                    st.image(img, channels="BGR", use_column_width=True)
+                    
+                    if st.button("Simpan Wajah Ini"):
+                        faces_data["names"].append(new_name)
+                        faces_data["embeddings"].append(emb.tolist())
+                        save_known_faces(faces_data)
+                        st.success(f"Wajah {new_name} berhasil disimpan!")
+                        st.rerun()
+                else:
+                    st.error("Wajah tidak terdeteksi")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# TAB LAPORAN
+with tab3:
+    st.header("Laporan Kehadiran")
+    
     try:
         df = pd.read_csv(ATTENDANCE_PATH)
         today = datetime.now(WIB).strftime('%Y-%m-%d')
         today_df = df[df['Waktu'].str.contains(today)]
         
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Hadir Hari Ini", len(today_df) if not today_df.empty else 0)
+        with col2:
+            st.metric("Total Terdaftar", len(faces_data['names']))
+        
         if not today_df.empty:
-            st.metric("Total Hadir", len(today_df))
+            st.subheader("Kehadiran Hari Ini")
             st.dataframe(today_df.sort_values(by='Waktu', ascending=False), use_column_width=True)
         else:
             st.info("Belum ada yang absen hari ini")
+        
+        with st.expander("Semua Riwayat"):
+            st.dataframe(df.sort_values(by='Waktu', ascending=False), use_column_width=True)
+            
     except FileNotFoundError:
         st.info("Belum ada data kehadiran")
+    
+    if st.button("Reset Semua Data"):
+        if os.path.exists(ENCODINGS_PATH):
+            os.remove(ENCODINGS_PATH)
+        if os.path.exists(ATTENDANCE_PATH):
+            os.remove(ATTENDANCE_PATH)
+        st.success("Data berhasil dihapus!")
+        st.rerun()
