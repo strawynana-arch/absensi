@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 import cv2
-import mediapipe as mp
 import numpy as np
 import pickle
 import pandas as pd
@@ -10,16 +9,16 @@ from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 from sklearn.neighbors import KNeighborsClassifier
 
 # --- PENGATURAN HALAMAN ---
-st.set_page_config(page_title="Absensi Face ID (Mediapipe)", layout="wide")
-st.title("Sistem Absensi Berbasis Face ID (Mediapipe)")
-st.write("Aplikasi ini menggunakan deteksi wajah Mediapipe untuk mencatat kehadiran.")
+st.set_page_config(page_title="Absensi Face ID", layout="wide")
+st.title("Sistem Absensi Berbasis Face ID")
+st.write("Aplikasi ini menggunakan deteksi wajah OpenCV untuk mencatat kehadiran.")
 
 # --- PATH PENYIMPANAN ---
 ENCODINGS_PATH = 'face_encodings.pkl'
 ATTENDANCE_PATH = 'attendance.csv'
 
-# --- INISIALISASI MEDIAPIPE ---
-mp_face = mp.solutions.face_detection
+# --- LOAD HAAR CASCADE untuk deteksi wajah ---
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 # --- FUNGSI BANTU ---
 def load_known_faces():
@@ -75,17 +74,27 @@ def log_attendance(name):
     return True
 
 def get_embedding(img):
-    """Ambil fitur wajah sederhana (bbox + keypoints)"""
-    with mp_face.FaceDetection(model_selection=0, min_detection_confidence=0.5) as fd:
-        results = fd.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        if results.detections:
-            det = results.detections[0]
-            box = det.location_data.relative_bounding_box
-            keypoints = []
-            for kp in det.location_data.relative_keypoints:
-                keypoints.extend([kp.x, kp.y])
-            emb = np.array([box.xmin, box.ymin, box.width, box.height] + keypoints, dtype=np.float32)
-            return emb.flatten()
+    """Ambil fitur wajah menggunakan OpenCV (HOG histogram sebagai embedding sederhana)"""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+    
+    if len(faces) > 0:
+        # Ambil wajah pertama
+        (x, y, w, h) = faces[0]
+        face_roi = gray[y:y+h, x:x+w]
+        
+        # Resize ke ukuran standar
+        face_roi = cv2.resize(face_roi, (100, 100))
+        
+        # Hitung histogram sebagai "embedding" sederhana
+        hist = cv2.calcHist([face_roi], [0], None, [256], [0, 256])
+        hist = cv2.normalize(hist, hist).flatten()
+        
+        # Tambahkan fitur ukuran dan posisi
+        features = np.concatenate([hist, [x/img.shape[1], y/img.shape[0], w/img.shape[1], h/img.shape[0]]])
+        
+        return features.astype(np.float32)
+    
     return None
 
 # --- MUAT DATA WAJAH ---
@@ -121,9 +130,9 @@ if app_mode == "Pendaftaran Wajah":
             faces_data["names"].append(new_name)
             faces_data["embeddings"].append(emb.tolist())
             save_known_faces(faces_data)
-            st.success(f"Wajah '{new_name}' berhasil disimpan!")
+            st.success(f"✅ Wajah '{new_name}' berhasil disimpan!")
         else:
-            st.error("Tidak ada wajah terdeteksi. Coba lagi.")
+            st.error("❌ Tidak ada wajah terdeteksi. Coba lagi dengan pencahayaan yang lebih baik.")
 
 # --- MODE ABSENSI REAL-TIME ---
 elif app_mode == "Absensi Real-time":
@@ -145,38 +154,35 @@ elif app_mode == "Absensi Real-time":
     class FaceRecognitionTransformer(VideoTransformerBase):
         def transform(self, frame):
             img = frame.to_ndarray(format="bgr24")
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
             recognized_name = None
 
-            with mp_face.FaceDetection(model_selection=0, min_detection_confidence=0.5) as fd:
-                results = fd.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            # Deteksi wajah dengan Haar Cascade
+            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
-                if results.detections:
-                    for det in results.detections:
-                        box = det.location_data.relative_bounding_box
-                        h, w, _ = img.shape
-                        x, y, ww, hh = int(box.xmin * w), int(box.ymin * h), int(box.width * w), int(box.height * h)
+            for (x, y, w, h) in faces:
+                # Gambar kotak
+                cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-                        # Gambar kotak
-                        cv2.rectangle(img, (x, y), (x + ww, y + hh), (0, 255, 0), 2)
+                # Ambil embedding
+                emb = get_embedding(img)
+                name = "Unknown"
+                
+                if clf and emb is not None:
+                    emb = emb.reshape(1, -1)
+                    name = clf.predict(emb)[0]
 
-                        # Ambil embedding
-                        emb = get_embedding(img)
-                        name = "Unknown"
-                        if clf and emb is not None:
-                            emb = emb.reshape(1, -1)
-                            name = clf.predict(emb)[0]
+                # Hanya catat kalau bukan Unknown
+                if name != "Unknown":
+                    if log_attendance(name):
+                        recognized_name = f"✅ Hadir: {name}"
+                else:
+                    recognized_name = "❌ Wajah tidak dikenali"
 
-                        # Hanya catat kalau bukan Unknown
-                        if name != "Unknown":
-                            if log_attendance(name):
-                                recognized_name = f"✅ Hadir: {name}"
-                        else:
-                            recognized_name = "❌ Wajah tidak dikenali"
-
-                        # Tulis nama di frame
-                        cv2.putText(img, name, (x, y - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+                # Tulis nama di frame
+                cv2.putText(img, name, (x, y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
 
             # Tambah jam realtime di pojok kiri atas
             cv2.putText(img, datetime.now().strftime("%H:%M:%S"),
@@ -196,7 +202,7 @@ elif app_mode == "Absensi Real-time":
         video_html_attrs={"controls": False, "autoPlay": True}
     )
 
-    st.subheader("Laporan Kehadiran")
+    st.subheader("📊 Laporan Kehadiran")
     try:
         attendance_df = pd.read_csv(ATTENDANCE_PATH)
         st.dataframe(attendance_df.sort_values(by='Waktu', ascending=False), use_container_width=True)
