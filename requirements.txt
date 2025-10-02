@@ -23,7 +23,7 @@ jsonschema-specifications==2025.9.1
 kiwisolver==1.4.9
 MarkupSafe==3.0.3
 matplotlib==3.10.6
-mediapipe>=0.10.9
+mediapipe==0.10.8
 ml_dtypes==0.5.3
 narwhals==2.6.0
 numpy==1.26.4
@@ -55,6 +55,4 @@ tornado==6.5.2
 typing_extensions==4.15.0
 tzdata==2025.2
 urllib3==2.5.0
-
 watchdog==6.0.0
-
