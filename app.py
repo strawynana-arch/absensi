@@ -6,25 +6,22 @@ import pickle
 import pandas as pd
 from datetime import datetime
 import pytz
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode
 from sklearn.neighbors import KNeighborsClassifier
+import time
 
-# --- PENGATURAN HALAMAN ---
+# Pengaturan
 st.set_page_config(page_title="Absensi Face ID", layout="wide")
-st.title("Sistem Absensi Berbasis Face ID")
-st.write("Aplikasi ini menggunakan deteksi wajah OpenCV untuk mencatat kehadiran.")
-
-# --- TIMEZONE WIB ---
 WIB = pytz.timezone('Asia/Jakarta')
-
-# --- PATH PENYIMPANAN ---
 ENCODINGS_PATH = 'face_encodings.pkl'
 ATTENDANCE_PATH = 'attendance.csv'
-
-# --- LOAD HAAR CASCADE untuk deteksi wajah ---
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-# --- FUNGSI BANTU ---
+# Session state untuk auto-capture
+if 'capture_mode' not in st.session_state:
+    st.session_state.capture_mode = False
+if 'last_capture_time' not in st.session_state:
+    st.session_state.last_capture_time = 0
+
 def load_known_faces():
     try:
         with open(ENCODINGS_PATH, 'rb') as f:
@@ -35,8 +32,6 @@ def load_known_faces():
             else:
                 encodings, names = data
                 embeddings = encodings
-
-            # pastikan semua embedding panjang sama
             clean_names, clean_embs = [], []
             target_len = None
             for n, e in zip(names, embeddings):
@@ -55,96 +50,105 @@ def save_known_faces(data):
         pickle.dump(data, f)
 
 def log_attendance(name):
-    """ Catat kehadiran hanya kalau nama valid (bukan Unknown) """
     if name == "Unknown":
         return False
-
     try:
         df = pd.read_csv(ATTENDANCE_PATH)
     except FileNotFoundError:
         df = pd.DataFrame(columns=['Nama', 'Waktu'])
-
-    # Cek duplikasi (1 menit terakhir)
     if not df.empty:
         last_entry = df[df['Nama'] == name]
         if not last_entry.empty:
-            last_time = WIB.localize(datetime.strptime(last_entry['Waktu'].iloc[-1], '%Y-%m-%d %H:%M:%S'))
-            if (datetime.now(WIB) - last_time).total_seconds() < 60:
-                return False
-
+            try:
+                last_time_str = last_entry['Waktu'].iloc[-1]
+                last_time = WIB.localize(datetime.strptime(last_time_str, '%Y-%m-%d %H:%M:%S'))
+                if (datetime.now(WIB) - last_time).total_seconds() < 60:
+                    return False
+            except:
+                pass
     now = datetime.now(WIB).strftime('%Y-%m-%d %H:%M:%S')
     df = pd.concat([df, pd.DataFrame([[name, now]], columns=['Nama', 'Waktu'])], ignore_index=True)
     df.to_csv(ATTENDANCE_PATH, index=False)
     return True
 
-def get_embedding(img):
-    """Ambil fitur wajah menggunakan OpenCV (versi lebih cepat)"""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # Resize untuk processing lebih cepat
-    small_gray = cv2.resize(gray, (0, 0), fx=0.5, fy=0.5)
-    faces = face_cascade.detectMultiScale(small_gray, 1.2, 4, minSize=(30, 30))
+def detect_face_ultra_fast(img):
+    """Ultra optimized untuk HP"""
+    # Resize super kecil
+    h, w = img.shape[:2]
+    scale = 0.3  # 30% dari ukuran asli
+    small = cv2.resize(img, (int(w*scale), int(h*scale)))
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    
+    # Deteksi dengan parameter sangat agresif
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=3, minSize=(15, 15))
     
     if len(faces) > 0:
-        # Ambil wajah pertama, scale kembali koordinat
-        (x, y, w, h) = faces[0] * 2
-        face_roi = gray[y:y+h, x:x+w]
+        (x, y, w, h) = faces[0]
+        # Scale kembali ke ukuran asli
+        x, y, w, h = int(x/scale), int(y/scale), int(w/scale), int(h/scale)
         
-        # Resize ke ukuran lebih kecil untuk processing cepat
-        face_roi = cv2.resize(face_roi, (64, 64))
+        # Extract face untuk embedding
+        face_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        face_roi = face_gray[y:y+h, x:x+w]
+        face_roi = cv2.resize(face_roi, (40, 40))  # Super kecil untuk speed
         
-        # Hitung histogram sebagai "embedding" sederhana
-        hist = cv2.calcHist([face_roi], [0], None, [128], [0, 256])  # Reduce bins
+        # Embedding simpel: histogram 32 bins + posisi
+        hist = cv2.calcHist([face_roi], [0], None, [32], [0, 256])
         hist = cv2.normalize(hist, hist).flatten()
         
-        # Tambahkan fitur ukuran dan posisi
-        features = np.concatenate([hist, [x/img.shape[1], y/img.shape[0], w/img.shape[1], h/img.shape[0]]])
+        img_h, img_w = img.shape[:2]
+        features = np.concatenate([hist, [x/img_w, y/img_h, w/img_w, h/img_h]])
         
-        return features.astype(np.float32)
+        return features.astype(np.float32), (x, y, w, h)
     
-    return None
+    return None, None
 
-# --- MUAT DATA WAJAH ---
+# Load data
 faces_data = load_known_faces()
 
-# --- SIDEBAR MODE ---
+# Sidebar
 st.sidebar.header("Mode Aplikasi")
 app_mode = st.sidebar.selectbox("Pilih Mode", ["Pendaftaran Wajah", "Absensi Real-time"])
 
-# --- RESET DATA ---
-if st.sidebar.button("🔴 Reset Data (Hapus Semua)"):
+if st.sidebar.button("Reset Data"):
     if os.path.exists(ENCODINGS_PATH):
         os.remove(ENCODINGS_PATH)
     if os.path.exists(ATTENDANCE_PATH):
         os.remove(ATTENDANCE_PATH)
-    st.sidebar.success("✅ Semua data wajah & absensi berhasil dihapus!")
+    st.sidebar.success("Data berhasil dihapus!")
     st.rerun()
 
-# --- MODE PENDAFTARAN WAJAH ---
+# PENDAFTARAN
 if app_mode == "Pendaftaran Wajah":
-    st.header("📝 Form Pendaftaran Wajah Baru")
-    new_name = st.text_input("Masukkan Nama Anda:")
+    st.header("Pendaftaran Wajah Baru")
+    
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        new_name = st.text_input("Nama Lengkap:")
+        img_file = st.camera_input("Ambil Foto Wajah")
+    with col2:
+        st.info(f"Terdaftar: {len(faces_data['names'])} orang")
 
-    img_file_buffer = st.camera_input("📸 Ambil Foto Wajah")
-
-    if img_file_buffer and new_name:
-        bytes_data = img_file_buffer.getvalue()
+    if img_file and new_name:
+        bytes_data = img_file.getvalue()
         cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-
-        emb = get_embedding(cv2_img)
+        emb, bbox = detect_face_ultra_fast(cv2_img)
+        
         if emb is not None:
             faces_data["names"].append(new_name)
             faces_data["embeddings"].append(emb.tolist())
             save_known_faces(faces_data)
-            st.success(f"✅ Wajah '{new_name}' berhasil disimpan!")
-            st.balloons()
+            st.success(f"Wajah '{new_name}' berhasil disimpan!")
+            time.sleep(1)
+            st.rerun()
         else:
-            st.error("❌ Tidak ada wajah terdeteksi. Coba lagi dengan pencahayaan yang lebih baik.")
+            st.error("Wajah tidak terdeteksi")
 
-# --- MODE ABSENSI REAL-TIME ---
+# ABSENSI REAL-TIME
 elif app_mode == "Absensi Real-time":
-    st.header("📹 Absensi Menggunakan Kamera")
-
-    # Siapkan model KNN
+    st.header("Absensi Real-time (Mode Interval)")
+    
+    # Load model
     clf = None
     if faces_data["names"] and faces_data["embeddings"]:
         try:
@@ -152,108 +156,90 @@ elif app_mode == "Absensi Real-time":
             y = np.array(faces_data["names"])
             clf = KNeighborsClassifier(n_neighbors=1, algorithm='ball_tree')
             clf.fit(X, y)
-            st.success(f"✅ Model siap! {len(faces_data['names'])} wajah terdaftar.")
         except Exception as e:
-            st.error(f"Error loading embeddings: {e}")
+            st.error(f"Error: {e}")
+            st.stop()
     else:
-        st.warning("⚠️ Belum ada wajah terdaftar. Silakan daftar dulu di menu 'Pendaftaran Wajah'.")
-
-    # Frame counter untuk skip processing (optimasi performa)
-    if 'frame_count' not in st.session_state:
-        st.session_state.frame_count = 0
+        st.warning("Belum ada wajah terdaftar")
+        st.stop()
     
-    notification_placeholder = st.empty()
-
-    class FaceRecognitionTransformer(VideoTransformerBase):
-        def __init__(self):
-            self.frame_skip = 2  # Process setiap 2 frame (optimasi)
-            self.counter = 0
-            self.last_name = None
+    st.info("Mode ini akan mengambil foto otomatis setiap 3 detik untuk mengenali wajah")
+    
+    # Interval setting
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        interval = st.slider("Interval capture (detik)", 2, 10, 3)
+    with col2:
+        if st.button("Stop" if st.session_state.capture_mode else "Start"):
+            st.session_state.capture_mode = not st.session_state.capture_mode
+            st.rerun()
+    
+    st.write(f"Waktu: {datetime.now(WIB).strftime('%H:%M:%S WIB')}")
+    
+    # Placeholder untuk notifikasi dan gambar
+    status_placeholder = st.empty()
+    image_placeholder = st.empty()
+    
+    # Mode capture aktif
+    if st.session_state.capture_mode:
+        status_placeholder.success("Mode deteksi aktif - Posisikan wajah Anda")
+        
+        # Auto-capture dengan interval
+        current_time = time.time()
+        if current_time - st.session_state.last_capture_time >= interval:
+            st.session_state.last_capture_time = current_time
             
-        def transform(self, frame):
-            img = frame.to_ndarray(format="bgr24")
+            # Ambil foto
+            camera_photo = st.camera_input("Capture", label_visibility="hidden", key=f"cam_{current_time}")
             
-            # Skip beberapa frame untuk performa lebih baik
-            self.counter += 1
-            if self.counter % self.frame_skip != 0:
-                return img
-            
-            # Resize untuk processing lebih cepat
-            small_img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
-            gray = cv2.cvtColor(small_img, cv2.COLOR_BGR2GRAY)
-
-            # Deteksi wajah dengan parameter dioptimasi
-            faces = face_cascade.detectMultiScale(gray, 1.2, 4, minSize=(30, 30))
-
-            for (x, y, w, h) in faces:
-                # Scale kembali koordinat ke ukuran asli
-                x, y, w, h = x*2, y*2, w*2, h*2
+            if camera_photo:
+                bytes_data = camera_photo.getvalue()
+                cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
                 
-                # Gambar kotak
-                cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-                # Ambil embedding (hanya jika ada model)
-                name = "Unknown"
-                if clf:
-                    emb = get_embedding(img)
-                    if emb is not None:
-                        emb = emb.reshape(1, -1)
-                        name = clf.predict(emb)[0]
-
-                # Catat kehadiran
-                if name != "Unknown" and name != self.last_name:
-                    if log_attendance(name):
-                        notification_placeholder.success(f"✅ Absensi berhasil: {name}")
-                        self.last_name = name
-
-                # Tulis nama di frame
-                cv2.putText(img, name, (x, y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-
-            # Tambah jam WIB realtime di pojok kiri atas
-            wib_time = datetime.now(WIB).strftime("%H:%M:%S WIB")
-            cv2.putText(img, wib_time, (10, 30), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-            return img
-
-    # WebRTC dengan setting optimasi
-    webrtc_ctx = webrtc_streamer(
-        key="absensi",
-        mode=WebRtcMode.SENDRECV,
-        video_transformer_factory=FaceRecognitionTransformer,
-        media_stream_constraints={
-            "video": {
-                "width": {"ideal": 640},
-                "height": {"ideal": 480},
-                "frameRate": {"ideal": 15, "max": 20}  # Limit FPS untuk performa
-            },
-            "audio": False
-        },
-        async_processing=True,
-    )
-
+                emb, bbox = detect_face_ultra_fast(cv2_img)
+                
+                if emb is not None and bbox is not None:
+                    emb_reshaped = emb.reshape(1, -1)
+                    name = clf.predict(emb_reshaped)[0]
+                    
+                    # Gambar kotak
+                    x, y, w, h = bbox
+                    color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+                    cv2.rectangle(cv2_img, (x, y), (x+w, y+h), color, 3)
+                    cv2.putText(cv2_img, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+                    
+                    # Tampilkan
+                    image_placeholder.image(cv2_img, channels="BGR", use_column_width=True)
+                    
+                    if name != "Unknown":
+                        if log_attendance(name):
+                            status_placeholder.success(f"Absensi berhasil: {name}")
+                            time.sleep(2)
+                        else:
+                            status_placeholder.info(f"{name} sudah absen")
+                    else:
+                        status_placeholder.warning("Wajah tidak dikenali")
+                else:
+                    status_placeholder.warning("Tidak ada wajah terdeteksi")
+            
+            time.sleep(0.5)
+            st.rerun()
+    else:
+        status_placeholder.info("Klik 'Start' untuk memulai deteksi")
+    
     st.divider()
     
-    st.subheader("📊 Laporan Kehadiran Hari Ini")
+    # Laporan
+    st.subheader("Laporan Hari Ini")
     try:
-        attendance_df = pd.read_csv(ATTENDANCE_PATH)
+        df = pd.read_csv(ATTENDANCE_PATH)
         today = datetime.now(WIB).strftime('%Y-%m-%d')
-        today_df = attendance_df[attendance_df['Waktu'].str.contains(today)]
+        today_df = df[df['Waktu'].str.contains(today)]
         
         if not today_df.empty:
-            st.dataframe(today_df.sort_values(by='Waktu', ascending=False), use_container_width=True)
-            st.metric("Total Kehadiran Hari Ini", len(today_df))
+            st.metric("Total Hadir", len(today_df))
+            st.dataframe(today_df.sort_values(by='Waktu', ascending=False), use_column_width=True)
         else:
-            st.info("Belum ada data kehadiran hari ini.")
-            
+            st.info("Belum ada yang absen hari ini")
     except FileNotFoundError:
-        st.info("Belum ada data kehadiran yang tercatat.")
-    
-    # Tampilkan semua data
-    with st.expander("📜 Lihat Semua Riwayat Kehadiran"):
-        try:
-            all_df = pd.read_csv(ATTENDANCE_PATH)
-            st.dataframe(all_df.sort_values(by='Waktu', ascending=False), use_container_width=True)
-        except FileNotFoundError:
-            st.info("Belum ada riwayat.")
+        st.info("Belum ada data kehadiran")
