@@ -1,1 +1,58 @@
-  a b s l - p y = = 2 . 3 . 1   a l t a i r = = 5 . 5 . 0   a t t r s = = 2 5 . 3 . 0   b l i n k e r = = 1 . 9 . 0   c a c h e t o o l s = = 6 . 2 . 0   c e r t i f i = = 2 0 2 5 . 8 . 3   c f f i = = 2 . 0 . 0   c h a r s e t - n o r m a l i z e r = = 3 . 4 . 3   c l i c k = = 8 . 3 . 0   c o l o r a m a = = 0 . 4 . 6   c o n t o u r p y = = 1 . 3 . 3   c y c l e r = = 0 . 1 2 . 1   f l a t b u f f e r s = = 2 5 . 9 . 2 3   f o n t t o o l s = = 4 . 6 0 . 1   g i t d b = = 4 . 0 . 1 2   G i t P y t h o n = = 3 . 1 . 4 5   i d n a = = 3 . 1 0   j a x = = 0 . 7 . 1   j a x l i b = = 0 . 7 . 1   J i n j a 2 = = 3 . 1 . 6   j s o n s c h e m a = = 4 . 2 5 . 1   j s o n s c h e m a - s p e c i f i c a t i o n s = = 2 0 2 5 . 9 . 1   k i w i s o l v e r = = 1 . 4 . 9   M a r k u p S a f e = = 3 . 0 . 3   m a t p l o t l i b = = 3 . 1 0 . 6   m e d i a p i p e   m l _ d t y p e s = = 0 . 5 . 3   n a r w h a l s = = 2 . 6 . 0   n u m p y = = 1 . 2 6 . 4   o p e n c v - c o n t r i b - p y t h o n = = 4 . 1 1 . 0 . 8 6   o p e n c v - p y t h o n = = 4 . 1 1 . 0 . 8 6   o p t _ e i n s u m = = 3 . 4 . 0   p a c k a g i n g = = 2 5 . 0   p a n d a s = = 2 . 3 . 3   p i l l o w = = 1 1 . 3 . 0   p r o t o b u f = = 4 . 2 5 . 8   p y a r r o w = = 2 1 . 0 . 0   p y c p a r s e r = = 2 . 2 3   p y d e c k = = 0 . 9 . 1   p y p a r s i n g = = 3 . 2 . 5   p y t h o n - d a t e u t i l = = 2 . 9 . 0 . p o s t 0   p y t z = = 2 0 2 5 . 2   r e f e r e n c i n g = = 0 . 3 6 . 2   r e q u e s t s = = 2 . 3 2 . 5   r p d s - p y = = 0 . 2 7 . 1   s c i p y = = 1 . 1 6 . 2   s e n t e n c e p i e c e = = 0 . 2 . 1   s i x = = 1 . 1 7 . 0   s m m a p = = 5 . 0 . 2   s o u n d d e v i c e = = 0 . 5 . 2   s t r e a m l i t = = 1 . 5 0 . 0   t e n a c i t y = = 9 . 1 . 2   t o m l = = 0 . 1 0 . 2   t o r n a d o = = 6 . 5 . 2   t y p i n g _ e x t e n s i o n s = = 4 . 1 5 . 0   t z d a t a = = 2 0 2 5 . 2   u r l l i b 3 = = 2 . 5 . 0   w a t c h d o g = = 6 . 0 . 0   
+absl-py==2.3.1
+altair==5.5.0
+attrs==25.3.0
+blinker==1.9.0
+cachetools==6.2.0
+certifi==2025.8.3
+cffi==2.0.0
+charset-normalizer==3.4.3
+click==8.3.0
+colorama==0.4.6
+contourpy==1.3.3
+cycler==0.12.1
+flatbuffers==25.9.23
+fonttools==4.60.1
+gitdb==4.0.12
+GitPython==3.1.45
+idna==3.10
+jax==0.7.1
+jaxlib==0.7.1
+Jinja2==3.1.6
+jsonschema==4.25.1
+jsonschema-specifications==2025.9.1
+kiwisolver==1.4.9
+MarkupSafe==3.0.3
+matplotlib==3.10.6
+mediapipe
+ml_dtypes==0.5.3
+narwhals==2.6.0
+numpy==1.26.4
+opencv-contrib-python==4.11.0.86
+opencv-python==4.11.0.86
+opt_einsum==3.4.0
+packaging==25.0
+pandas==2.3.3
+pillow==11.3.0
+protobuf==4.25.8
+pyarrow==21.0.0
+pycparser==2.23
+pydeck==0.9.1
+pyparsing==3.2.5
+python-dateutil==2.9.0.post0
+pytz==2025.2
+referencing==0.36.2
+requests==2.32.5
+rpds-py==0.27.1
+scipy==1.16.2
+sentencepiece==0.2.1
+six==1.17.0
+smmap==5.0.2
+sounddevice==0.5.2
+streamlit==1.50.0
+tenacity==9.1.2
+toml==0.10.2
+tornado==6.5.2
+typing_extensions==4.15.0
+tzdata==2025.2
+urllib3==2.5.0
+watchdog==6.0.0
